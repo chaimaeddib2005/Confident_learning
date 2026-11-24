@@ -1,0 +1,78 @@
+# ---------------------------------------------------------------
+# Datasets and cached features (large, re-downloadable / re-computable)
+# ---------------------------------------------------------------
+/data/
+cifar-10-batches-py/
+cifar-10-python.tar.gz
+*.npz
+*.npy
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+
+# ---------------------------------------------------------------
+# Trained models and checkpoints
+# ---------------------------------------------------------------
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.joblib
+checkpoints/
+models/
+runs/
+wandb/
+lightning_logs/
+env/*
+
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ---------------------------------------------------------------
+# LaTeX build artifacts (keep the .tex sources and final PDFs)
+# ---------------------------------------------------------------
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.vrb
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+
+# ---------------------------------------------------------------
+# Results: keep the small final outputs (CSV + figures) in git,
+# ignore scratch runs
+# ---------------------------------------------------------------
+results/tmp/
+results/*_scratch*
+results/*.partial.csv
+
+# ---------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

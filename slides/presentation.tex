@@ -1,0 +1,242 @@
+\documentclass[aspectratio=169,10pt]{beamer}
+\usetheme{Madrid}
+\definecolor{accent}{HTML}{1F4E79}
+\setbeamercolor{structure}{fg=accent}
+\setbeamertemplate{navigation symbols}{}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,array}
+\usepackage[ruled,vlined,linesnumbered,noend]{algorithm2e}
+\usepackage{graphicx}
+\usepackage{tikz}
+
+\newcommand{\yt}{\tilde y}
+\newcommand{\ys}{y^{*}}
+\newcommand{\phat}{\hat p}
+\newcommand{\Cyy}{C_{\tilde y,y^*}}
+\newcommand{\Qyy}{Q_{\tilde y,y^*}}
+\newcommand{\Qh}{\hat Q_{\tilde y,y^*}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\E}{\mathbb{E}}
+\DontPrintSemicolon
+\SetAlgoLined
+
+\title[Confident learning under instance-dependent noise]{Confident Learning and its Class-Conditional Assumption}
+\subtitle{What happens when label noise depends on the example?}
+\author{Group names here}
+\institute{Machine Learning course project}
+\date{\today}
+
+\begin{document}
+
+% ---------------------------------------------------------------- 1
+\begin{frame}
+  \titlepage
+  % TIMING (total about 10 min): 1: 0:20 | 2: 1:00 | 3: 1:40 | 4: 1:20 | 5: 1:00 | 6: 1:20 | 7: 1:00 | 8: 0:50 | 9: 0:40 | 10: 1:00 | 11: 0:30
+\end{frame}
+
+% ---------------------------------------------------------------- 2
+\begin{frame}{Problem and assumption}
+  \textbf{Data:} $X=(x_k,\tilde y_k)_{k=1}^n$ with \emph{given} labels $\tilde y\in[m]$ that may be wrong; the true label $y^*$ is latent.\\[4pt]
+  \textbf{Goal of confident learning (CL):} estimate the joint $\;\Qyy,\;[\Qyy]_{ij}=p(\tilde y=i,\,y^*=j)$, then find every $x$ with $y^*\neq\tilde y$.\\[6pt]
+  \begin{block}{Class-conditional noise assumption}
+    \[
+      p(\tilde y\mid y^*;x)\;=\;p(\tilde y\mid y^*)
+    \]
+    the chance of a label flip depends on the \emph{true class} only, not on the input $x$.
+  \end{block}
+  \textbf{Only inputs:} noisy labels $\tilde y$ and \emph{out-of-sample} probabilities $\hat P_{k,i}=\hat p(\tilde y=i;x_k,\theta)$ from any model (cross-validation).\\
+  \textbf{Derived:} prior $Q_{y^*}$, noise rates $p(\tilde y|y^*)$, and the \emph{number} of errors $n\,[\Qyy]_{ij}$ for each class pair.
+\end{frame}
+
+% ---------------------------------------------------------------- 3
+\begin{frame}{Count: thresholds and the confident joint}
+  \textbf{Per-class threshold} = average self-confidence of class $j$:
+  \[ t_j=\frac{1}{|X_{\tilde y=j}|}\sum_{x\in X_{\tilde y=j}}\hat p(\tilde y=j;x,\theta) \]
+  \textbf{Confident joint:}\; $\Cyy[i][j]=|\hat X_{\tilde y=i,\,y^*=j}|$ with
+  \[
+    \hat X_{\tilde y=i,\,y^*=j}=\Bigl\{x\in X_{\tilde y=i}:\ \hat p(\tilde y=j;x)\ge t_j,\ \ j=\argmax_{l:\ \hat p(\tilde y=l;x)\ge t_l}\hat p(\tilde y=l;x)\Bigr\}
+  \]
+  \vspace{-2pt}
+  \begin{columns}[T]
+    \begin{column}{0.56\textwidth}
+      \small
+      \begin{tabular}{@{}cclc@{}}
+        \toprule
+        $\tilde y$ & $\hat p$ (dog,fox,cow) & passes & cell\\
+        \midrule
+        dog & (.90,.05,.05) & dog & dog,dog\\
+        dog & (.70,.20,.10) & dog & dog,dog\\
+        dog & (.10,.80,.10) & fox & \textbf{dog,fox}\\
+        fox & (.60,.30,.10) & dog & \textbf{fox,dog}\\
+        cow & (.30,.30,.40) & none & ---\\
+        \bottomrule
+      \end{tabular}\\[2pt]
+      {\scriptsize (5 of the 9 rows of the worked example; thresholds $t\approx(.57,.53,.70)$)}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \small
+      \begin{itemize}
+        \item argmax baseline would force the last row into cow
+        \item thresholds adapt to over-confident classes and class imbalance
+        \item cost $O(nm+m^2)$
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------- 4
+\begin{frame}{Calibrate, prune, train}
+  \textbf{Calibration:} match row sums to the observed class sizes, then normalize to total mass 1
+  \[
+    \tilde C_{ij}=\frac{\Cyy[i][j]}{\sum_{j'}\Cyy[i][j']}\,|X_{\tilde y=i}|,\qquad
+    \hat Q_{\tilde y=i,\,y^*=j}=\frac{\tilde C_{ij}}{\sum_{i',j'}\tilde C_{i'j'}}
+  \]
+  Marginals give $\hat Q_{y^*=j}=\sum_i\hat Q_{ij}$ and $\hat p(\tilde y=i\mid y^*=j)=\hat Q_{ij}/\hat Q_{y^*=j}$.\\[4pt]
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      \begin{algorithm}[H]
+        \KwIn{$\hat P$ (out-of-sample), $\tilde y$}
+        compute $t_j$ for all classes\;
+        \For{each example $k$}{
+          $S\leftarrow\{j:\hat P[k][j]\ge t_j\}$\;
+          \lIf{$S=\emptyset$}{skip}
+          $y^*\leftarrow\argmax_{j\in S}\hat P[k][j]$\;
+          $C[\tilde y_k][y^*]\mathrel{+}=1$\;
+        }
+        calibrate $C\to\hat Q_{\tilde y,y^*}$\;
+        flag $\{x:\ y^*\ne\tilde y\}$; drop them\;
+        train with weights $w_i=\hat Q_{y^*}[i]/\hat Q_{ii}$\;
+      \end{algorithm}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \small
+      \textbf{Ranking:} order the flagged examples by the normalized margin
+      \[\hat p(\tilde y)-\max_{j\ne\tilde y}\hat p(j)\]
+      \textbf{Model-agnostic:} any model gives $\hat P$; any model trains on the cleaned data.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------- 5
+\begin{frame}{Theory: when is CL exact?}
+  \textbf{Lemma (ideal thresholds).} If $\hat p(\tilde y=i;x)=p(\tilde y=i\mid y^*=y^*_x)$, then
+  \[ t_i=\sum_{j}p(\tilde y=i\mid y^*=j)\,p(y^*=j\mid\tilde y=i) \]
+  a weighted average of the noise rates, hence $t_j\le p(\tilde y=j\mid y^*=j)$ when the diagonal is the row maximum.\\[4pt]
+  \textbf{Theorem 1.} Ideal $\hat p$ + diagonal of $Q_{\tilde y|y^*}$ maximal in its row and column $\Rightarrow\ \hat X_{\tilde y=i,y^*=j}=X_{\tilde y=i,y^*=j}$ and $\hat Q\approx\Qyy$.\\[4pt]
+  \textbf{Robustness.} Exact recovery persists if
+  \begin{itemize}
+    \item $\hat p=\varepsilon^{(1)}_jp^*+\varepsilon^{(2)}_j$ per class, $\varepsilon^{(1)}_j>0$ (Cor.\ 1.1), or
+    \item $\hat p=p^*+\varepsilon_x$ per example, as long as $\hat p\gtrless\hat t_j$ \emph{agrees with} $p^*\gtrless t_j$ (Thm.\ 2, mean-shift $\bar\varepsilon_j$ absorbed in $\hat t_j=t_j+\bar\varepsilon_j$).
+  \end{itemize}
+  \alert{Key step:} every example of true class $j$ must pass the threshold $t_j$, and $t_j$ must be the mean of a \emph{representative} sample of class $j$.
+\end{frame}
+
+% ---------------------------------------------------------------- 6
+\begin{frame}{Our question: instance-dependent noise}
+  Real label errors are not uniform over a class: ambiguous images are mislabeled more often.\\
+  \alert{Does CL survive when $p(\tilde y\mid y^*;x)$ depends on $x$?}\\[6pt]
+  \textbf{Hardness} $u_x\in(0,1)$: percentile rank of $1-\hat p(y^*\!\mid x)$ within the true class (clean-label model); $u\to1$ = hard.\\[4pt]
+  \begin{block}{Noise model (one knob $\alpha\ge0$)}
+    \[
+      q_j(x)=\min\!\bigl(1,\ \tau_j\,(1+\alpha)\,u_x^{\alpha}\bigr),\qquad
+      \text{if flipped: } \tilde y\sim D[:,j]
+    \]
+  \end{block}
+  \begin{itemize}
+    \item $\alpha=0$: exactly the paper's class-conditional noise (reproduction check)
+    \item $u_x\sim\mathcal U(0,1)$ in a class $\Rightarrow\ \E[(1+\alpha)u_x^{\alpha}]=1\Rightarrow\ \E[q_j(x)]=\tau_j$ for \emph{every} $\alpha$
+    \item so $\Qyy$ is the same for all $\alpha$: any change in performance is caused by the broken assumption alone
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------- 7
+\begin{frame}{Why CL should degrade (hypotheses)}
+  \begin{enumerate}
+    \item \textbf{Flipped examples are hard $\Rightarrow$ low $\hat p$ for their true class.}
+    \[
+      \Pr\bigl(\hat p_{x,\tilde y=y^*}\ge t_{y^*}\mid x\ \text{flipped}\bigr)\;<\;\Pr\bigl(\hat p_{x,\tilde y=y^*}\ge t_{y^*}\mid x\ \text{clean}\bigr)
+    \]
+    The proof's key step fails: errors are \emph{not counted}. Prediction: \textbf{recall drops} and $\Cyy$ undercounts.
+    \item \textbf{$t_j$ is computed on a non-representative sample.} Hard examples leave $X_{\tilde y=j}$ and foreign examples enter, so $t_j\ne\E_{x\in\text{class }j}[\hat p]$.\\
+    In Condition 3 terms: $\E[\varepsilon_x\mid x\ \text{flipped}]\neq\bar\varepsilon_j$ (noise is correlated with being an error).
+  \end{enumerate}
+  \vspace{4pt}
+  \textbf{Measured diagnostics:} recall, precision, F1, RMSE of $\hat Q$, and the mean hardness $\bar u$ of \emph{missed} errors and of \emph{false positives}.
+\end{frame}
+
+% ---------------------------------------------------------------- 8
+\begin{frame}{Proposed fix: difficulty-bucketed thresholds}
+  Label-free difficulty proxy: bucket $b(x)\in\{1..B\}$ = quantile of the entropy of the row $\hat P_{x,\cdot}$. One threshold per (class, bucket):
+  \[ t_{j,b}=\frac{1}{|X_{\tilde y=j,\,b}|}\sum_{x\in X_{\tilde y=j,\,b}}\hat p(\tilde y=j;x,\theta) \]
+  \begin{columns}[T]
+    \begin{column}{0.58\textwidth}
+      \begin{algorithm}[H]
+        \KwIn{$\hat P$, $\tilde y$, number of buckets $B$}
+        $b(x)\leftarrow$ entropy quantile bucket of $\hat P_{x,\cdot}$\;
+        $t_{j,c}\leftarrow$ mean of $\hat P[k][j]$ over $\{k:\tilde y_k=j,\,b(x_k)=c\}$\;
+        \For{each example $k$}{
+          $S\leftarrow\{j:\hat P[k][j]\ge t_{j,\,b(x_k)}\}$\;
+          \lIf{$S=\emptyset$}{skip}
+          $y^*\leftarrow\argmax_{j\in S}\hat P[k][j]$\;
+          $C[\tilde y_k][y^*]\mathrel{+}=1$\;
+        }
+        calibrate and prune as before\;
+      \end{algorithm}
+    \end{column}
+    \begin{column}{0.40\textwidth}
+      \small
+      \begin{itemize}
+        \item $B=1$ recovers standard CL
+        \item hard buckets get lower thresholds, so hard errors can pass
+        \item \alert{risk}: more false positives; we test it, we do not assume it works
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------- 9
+\begin{frame}{Experimental protocol (CIFAR-10, as in the paper)}
+  \begin{itemize}
+    \item \textbf{Noise:} 20\% and 40\%, sparsity 0.4, $\alpha\in\{0,0.5,1\}$; same destination matrix and same random draws across $\alpha$
+    \item \textbf{Probabilities:} 4-fold cross-validation (out-of-sample $\hat P$)
+    \item \textbf{Methods:} $C_{\text{confusion}}$ (argmax), standard CL, bucketed CL ($B=3,5$)
+    \item \textbf{Metrics (ground truth known):} detection precision / recall / F1; RMSE between $\hat Q_{\tilde y,y^*}$ and the realized joint; test accuracy after cleaning and reweighting
+    \item \textbf{Seeds:} several; mean $\pm$ std
+    \item \textbf{Sanity checks:} $\alpha=0$ should reproduce the paper's behaviour; unit tests recover the worked example and Theorem~1 exactly
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------- 10
+\begin{frame}{Results}
+  \IfFileExists{../results/f1_vs_alpha.pdf}{%
+    \centering
+    \includegraphics[width=0.92\textwidth]{../results/f1_vs_alpha.pdf}
+  }{%
+    \begin{center}
+    \fbox{\parbox{0.8\textwidth}{\centering\vspace{1.2cm}
+      \textbf{CIFAR-10 results to be inserted}\\[4pt]
+      run \texttt{python src/run\_experiments.py --dataset cifar10 ...}\\
+      then \texttt{python src/make\_plots.py}\\
+      this slide picks up \texttt{results/f1\_vs\_alpha.pdf} automatically
+    \vspace{1.2cm}}}
+    \end{center}
+  }
+  \vspace{2pt}
+  {\small Fill in after running: (i) does recall of standard CL fall with $\alpha$? (ii) does bucketing recover it, and at what cost in precision? (iii) is $\hat Q$ still accurate?}
+\end{frame}
+
+% ---------------------------------------------------------------- 11
+\begin{frame}{Conclusion}
+  \begin{itemize}
+    \item CL = \alert{count} with per-class thresholds, \alert{calibrate} to a joint $\hat Q_{\tilde y,y^*}$, \alert{prune} by ranking; model-agnostic and exact under explicit conditions on $\hat p$
+    \item The proofs rely on class-conditional noise: errors must look like a typical sample of their true class
+    \item Our study: a mean-preserving instance-dependent noise model with one knob $\alpha$, a diagnosis (non-representative thresholds, correlated errors) and a bucketed-threshold fix
+    \item \textbf{Limitations:} hardness comes from a model; entropy buckets are a proxy; synthetic noise; one dataset; the fix is empirical and has no guarantee yet
+  \end{itemize}
+  \vspace{6pt}
+  \centering\textbf{Questions?}
+\end{frame}
+
+\end{document}

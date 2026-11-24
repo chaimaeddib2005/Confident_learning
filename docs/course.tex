@@ -1,0 +1,681 @@
+\documentclass[11pt,a4paper]{report}
+\usepackage[margin=2.6cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs,enumitem,array}
+\usepackage[most]{tcolorbox}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\usepackage{titlesec}
+
+\definecolor{accent}{HTML}{1F4E79}
+\titleformat{\chapter}[display]{\normalfont\huge\bfseries\color{accent}}{\chaptertitlename\ \thechapter}{10pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{-10pt}{22pt}
+
+% ---------- notation ----------
+\newcommand{\yt}{\tilde y}
+\newcommand{\ys}{y^{*}}
+\newcommand{\Pm}{\hat P}
+\newcommand{\Cyy}{C_{\tilde y,y^*}}
+\newcommand{\Qyy}{Q_{\tilde y,y^*}}
+\newcommand{\Qh}{\hat Q_{\tilde y,y^*}}
+\newcommand{\Cconf}{C_{\text{confusion}}}
+\newcommand{\Xh}{\hat X}
+\newcommand{\phat}{\hat p}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\1}{\mathbf 1}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\approxeqq}{\approx}
+
+% ---------- theorem environments ----------
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{condition}[definition]{Condition}
+\newtheorem{example}[definition]{Example}
+\newtheorem{exercise}{Exercise}[chapter]
+\theoremstyle{plain}
+\newtheorem{lemma}[definition]{Lemma}
+\newtheorem{theorem}[definition]{Theorem}
+\newtheorem{corollary}[definition]{Corollary}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\tcbset{boxstyle/.style={enhanced,breakable,colback=accent!5,colframe=accent,boxrule=0.6pt,arc=2pt,left=6pt,right=6pt,top=4pt,bottom=4pt}}
+\newtcolorbox{intuition}{boxstyle,title={Intuition}}
+\newtcolorbox{keyidea}{boxstyle,colback=orange!8,colframe=orange!70!black,title={Key idea}}
+\newtcolorbox{pitfall}{boxstyle,colback=red!5,colframe=red!60!black,title={Careful}}
+
+\lstset{basicstyle=\ttfamily\small,keywordstyle=\color{accent}\bfseries,commentstyle=\color{gray}\itshape,
+  frame=single,framerule=0.3pt,breaklines=true,language=Python,columns=fullflexible,showstringspaces=false,
+  morekeywords={as}}
+
+\SetKwComment{Comment}{$\triangleright$ }{}
+\SetAlgoLined
+
+\title{\textbf{Confident Learning}\\[4pt]\Large A Course on Estimating Uncertainty in Dataset Labels\\[8pt]
+\large Mathematics and Algorithms}
+\author{Based on the paper by C.\,G.\ Northcutt, L.\ Jiang and I.\,L.\ Chuang\\(JAIR, arXiv:1911.00068)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent This course reconstructs, from first principles, the theory and algorithms of \emph{confident learning} (CL): a model-agnostic, data-centric framework that estimates the joint distribution between the \emph{given} (noisy) labels and the \emph{unknown} true labels, finds mislabeled examples, and trains on the cleaned data. Only the mathematics and the algorithms are kept: setting, the confident joint, joint estimation, rank-and-prune, and the exactness/consistency theorems with complete proofs. Each chapter ends with exercises; hints and solution sketches are collected at the end, together with a runnable reference implementation.
+\end{abstract}
+
+\tableofcontents
+
+% =====================================================================
+\chapter{Orientation}
+% =====================================================================
+
+\section{The problem}
+Supervised learning assumes labels are correct. In practice, large datasets contain label errors. Two questions arise:
+\begin{enumerate}[label=(\alph*)]
+  \item \textbf{Finding:} which examples in the dataset are mislabeled?
+  \item \textbf{Learning:} how do we train a good model despite the noise?
+\end{enumerate}
+Most prior work is \emph{model-centric}: it modifies the architecture or the loss to be robust to noise. Confident learning is \emph{data-centric}: it characterizes the noise in the \emph{data} first, using the outputs of \emph{any} probabilistic classifier, and then cleans.
+
+\section{The three principles}
+CL is assembled from three ideas that appear separately throughout the literature:
+\begin{description}[leftmargin=2.4cm,style=nextline]
+  \item[Prune] remove examples suspected to be mislabeled (rather than iteratively relabel them).
+  \item[Count] estimate noise by \emph{counting} examples whose predicted probability exceeds a per-class threshold, rather than by averaging possibly miscalibrated probabilities.
+  \item[Rank] decide \emph{which} examples to prune by ranking them (by self-confidence or margin), which only depends on the relative order of probabilities, not their calibration.
+\end{description}
+
+\section{The pipeline at a glance}
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 6mm, box/.style={draw=accent,fill=accent!6,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt,font=\footnotesize},>={Stealth[length=2.5mm]}]
+\node[box] (in) {noisy labels $\tilde y$\\ out-of-sample probs.\ $\hat P$};
+\node[box,right=of in] (cj) {confident joint\\ $C_{\tilde y,y^*}$};
+\node[box,right=of cj] (qj) {calibrate\\ $\hat Q_{\tilde y,y^*}$};
+\node[box,right=of qj] (pr) {rank \& prune\\ label errors};
+\node[box,right=of pr] (tr) {train on clean\\ data (reweighted)};
+\draw[->] (in)--(cj); \draw[->] (cj)--(qj); \draw[->] (qj)--(pr); \draw[->] (pr)--(tr);
+\end{tikzpicture}
+\end{center}
+Chapter~2 sets up notation and assumptions; Chapter~3 builds the confident joint (\emph{count}); Chapter~4 calibrates it into a joint distribution and derives the noise statistics; Chapter~5 covers \emph{rank and prune} and training; Chapter~6 proves when CL is exactly correct; Chapter~7 collects the baseline comparison, complexity and practical remarks.
+
+% =====================================================================
+\chapter{Setup, Assumptions and Notation}
+% =====================================================================
+
+\section{Data and labels}
+Let $[m]=\{1,\dots,m\}$ be the set of classes. The observed dataset is
+\[
+X := (x,\tilde y)^n \in (\R^d,[m])^n,
+\]
+that is, $n$ examples $x\in\R^d$ with \emph{observed, possibly noisy} labels $\tilde y\in[m]$. Each example also has a \emph{latent true label} $y^*\in[m]$ which we never observe. Example and label are coupled in $X$: cleaning removes both.
+
+We write $X_{\tilde y=i}$ for the examples with noisy label $i$ and $X_{\tilde y=i,y^*=j}$ for those with noisy label $i$ and true label $j$. The \emph{hat} $\hat X_{\tilde y=i,y^*=j}$ denotes an estimate of that set.
+
+\section{The class-conditional noise assumption}
+\begin{definition}[Class-conditional classification noise]
+Before $\tilde y$ is observed, a noise process maps $y^*\to\tilde y$ such that every example of true class $j$ is independently relabeled as class $i$ with probability
+\[
+p(\tilde y=i\mid y^*=j),
+\]
+\emph{independent of the input $x$}:
+\[
+p(\tilde y\mid y^*;x)=p(\tilde y\mid y^*).
+\]
+\end{definition}
+This is the classical Angluin--Laird classification noise process. It is reasonable whenever label confusion is driven by the \emph{class} (a leopard is more likely to be mislabeled ``jaguar'' than ``bathtub''), and it permits asymmetric, sparse noise.
+
+The notation $p(\tilde y;x)$ (rather than $p(\tilde y\mid x)$) emphasizes that $x$ is observed and assumed error-free.
+
+\section{Matrices}
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}p{3.3cm}p{10.6cm}@{}}
+\toprule
+\textbf{Symbol} & \textbf{Meaning}\\
+\midrule
+$\hat P\in\R^{n\times m}$ & out-of-sample predicted probabilities, $\hat P_{k,i}:=\hat p(\tilde y=i;x_k,\theta)$\\
+$\hat p_{x,\tilde y=i}$ & shorthand for $\hat p(\tilde y=i;x,\theta)$\\
+$Q_{y^*}$ & prior of true labels, $p(y^*=i)$\\
+$Q_{\tilde y,y^*}$ & $m\times m$ \emph{joint}, $[Q_{\tilde y,y^*}]_{ij}=p(\tilde y=i,y^*=j)$\\
+$Q_{\tilde y|y^*}$ & noise transition matrix (noisy channel), $[\cdot]_{ij}=p(\tilde y=i\mid y^*=j)$\\
+$Q_{y^*|\tilde y}$ & mixing (inverse noise) matrix, $[\cdot]_{ij}=p(y^*=j\mid\tilde y=i)$\\
+$C_{\tilde y,y^*}\in\N_{\ge0}^{m\times m}$ & the \emph{confident joint}: an unnormalized count estimate of $Q_{\tilde y,y^*}$\\
+$C_{\text{confusion}}$ & baseline confusion matrix of $\tilde y_k$ vs.\ $\arg\max_i \hat p_{x_k,\tilde y=i}$\\
+$t_j$ & per-class threshold: average self-confidence of class $j$\\
+$p^*_{x,\tilde y=i}$ & ideal probability $p^*(\tilde y=i\mid y^*=y^*_x)$\\
+\bottomrule
+\end{tabular}
+\end{center}
+Hats ($\hat Q,\hat p,\hat X$) denote estimates. Throughout, rows of the matrices above are indexed by the \emph{noisy} label $\tilde y$ and columns by the \emph{true} label $y^*$, so an entry $[C_{\tilde y,y^*}]_{3,1}=10$ reads ``ten examples are labeled 3 but should be labeled 1''.
+
+\begin{pitfall}
+$Q_{\tilde y|y^*}$ has \emph{column}-stochastic structure ($\sum_i p(\tilde y=i\mid y^*=j)=1$ for each $j$), whereas $Q_{y^*|\tilde y}$ defined above is \emph{row}-stochastic in our indexing. Keep track of which index is conditioned on.
+\end{pitfall}
+
+\section{Goal}
+Because the noise is data-independent, characterizing label uncertainty reduces to estimating $p(\tilde y\mid y^*)$ and the prior $p(y^*)$. Earlier works estimate them separately. CL estimates both at once by estimating the \emph{joint}
+\[
+Q_{\tilde y,y^*}\quad\text{and then uses it to find every } x \text{ with } y^*\ne\tilde y .
+\]
+This is hard: the model's predicted probabilities contain \emph{epistemic} error (the model is imperfect) which must be disentangled from the \emph{aleatoric} label noise we want to measure, and we know neither $Q_{\tilde y|y^*}$, $Q_{y^*}$ nor any true label.
+
+\begin{definition}[Sparsity]
+The sparsity of the label noise is the fraction of zeros among the off-diagonal entries of $Q_{\tilde y,y^*}$. Sparsity $0$ means every confusion has non-zero probability; sparsity $1$ means no noise at all. High sparsity (non-uniform noise) is typical of real data: ``missile'' may be confused with ``projectile'' but essentially never with ``wine''.
+\end{definition}
+
+\begin{definition}[Self-confidence]
+For an example $x$ with given label $\tilde y=i$, its self-confidence is $\hat p(\tilde y=i;x\in X_{\tilde y=i},\theta)$, the probability the model assigns to the given label. Low self-confidence is a heuristic indicator of a label error.
+\end{definition}
+
+\section{Where the probabilities come from}
+CL needs only two inputs: the vector of noisy labels and the matrix $\hat P$. $\hat P$ must be \emph{out-of-sample} (held-out): e.g.\ $k$-fold cross-validation, where every example is predicted by a model that did not train on it. Any model producing $x\mapsto\hat p(\tilde y=\cdot\,;x,\theta)$ works (neural net with softmax, logistic regression, naive Bayes, \dots). CL therefore \emph{decouples} the model from the data-cleaning step. The model affects the quality of $\hat P$, which is why the theory in Chapter~6 asks how wrong $\hat P$ may be while CL still recovers the labels exactly.
+
+\section*{Exercises}
+\begin{exercise}
+Given $Q_{\tilde y,y^*}$, express $Q_{y^*}$, $Q_{\tilde y|y^*}$ and $Q_{y^*|\tilde y}$ in terms of its entries. Show that there is no label noise iff all off-diagonal entries of $Q_{\tilde y,y^*}$ vanish, i.e.\ iff the sparsity equals $1$.
+\end{exercise}
+\begin{exercise}
+Why is it essential that $\hat P$ be out-of-sample? What would happen to self-confidence if the model memorized the noisy labels?
+\end{exercise}
+
+% =====================================================================
+\chapter{Count: The Confident Joint}
+% =====================================================================
+
+\section{Per-class thresholds}
+For each class $j$ define the threshold as the \emph{expected self-confidence} of class $j$:
+\begin{equation}\label{eq:thresh}
+t_j \;=\; \frac{1}{|X_{\tilde y=j}|}\sum_{x\in X_{\tilde y=j}} \hat p(\tilde y=j;x,\theta).
+\end{equation}
+
+\begin{intuition}
+An example whose probability for class $j$ exceeds the \emph{typical} probability of examples labeled $j$ probably belongs to class $j$. Using a per-class threshold (instead of a global $0.5$ or an $\arg\max$) calibrates for a model that is over-confident on some classes and under-confident on others, and for class imbalance.
+\end{intuition}
+
+\section{The confident joint}
+\begin{definition}[Confident joint]
+The confident joint is the $m\times m$ integer matrix
+\begin{equation}\label{eq:cj}
+\Cyy[i][j] := |\hat X_{\tilde y=i,y^*=j}|,
+\end{equation}
+\[
+\hat X_{\tilde y=i,y^*=j} := \Bigl\{x\in X_{\tilde y=i}:\ \hat p(\tilde y=j;x,\theta)\ge t_j,\ \ j=\argmax_{l\in[m]:\,\hat p(\tilde y=l;x,\theta)\ge t_l}\hat p(\tilde y=l;x,\theta)\Bigr\}.
+\]
+\end{definition}
+In words: for each example $x$ with given label $i$, collect the classes whose threshold it passes; among those, guess as true label the one with the \emph{largest probability}; record the example in cell $(i,\hat y^*)$. Diagonal entries count examples believed correctly labeled; off-diagonal entries count suspected errors, with the \emph{identity} of the examples retained in the sets $\hat X_{\tilde y=i,y^*=j}$.
+
+\subsection*{Collisions}
+Dropping the $\argmax$ gives the simplified rule $\hat X^{\text{simple}}_{\tilde y=i,y^*=j}=\{x\in X_{\tilde y=i}:\hat p(\tilde y=j;x,\theta)\ge t_j\}$. It suffers from \emph{collisions}: $x$ may pass several thresholds and land in several bins (only along the $y^*$ dimension, since $\tilde y$ is given). Eq.~\eqref{eq:cj} resolves a collision by taking the $\argmax$ among the classes passed. With softmax outputs, collisions are frequent at high temperature (near-uniform outputs), rarer at low temperature and absent for one-hot outputs.
+
+\subsection*{Three nice properties}
+\begin{enumerate}
+  \item \textbf{Robustness to alien / pure-noise examples.} An example with near-uniform probabilities passes no threshold and is \emph{counted nowhere}.
+  \item \textbf{Interpretability.} $t_j$ encodes ``more likely class $j$ than the average class-$j$ example''.
+  \item \textbf{Flexibility.} One may replace the mean in~\eqref{eq:thresh} by, e.g., a high percentile to find errors at higher confidence. The analysis in Chapter~6 uses the mean.
+\end{enumerate}
+
+\section{Algorithm}
+\begin{algorithm}[H]
+\caption{ConfidentJoint$(\hat P,\tilde y)$}\label{alg:cj}
+\KwIn{$\hat P\in\R^{n\times m}$ out-of-sample probabilities; $\tilde y\in[m]^n$ noisy labels}
+\KwOut{$C\in\N^{m\times m}$ unnormalized counts}
+\tcp{Part 1: thresholds}
+\For{$j\leftarrow1$ \KwTo $m$}{
+  $t[j]\leftarrow \operatorname{mean}\{\hat P[k][j] : \tilde y[k]=j\}$ \tcp*{or a percentile for more confidence}
+}
+\tcp{Part 2: count}
+$C\leftarrow \mathbf 0_{m\times m}$\;
+\For{$k\leftarrow 1$ \KwTo $n$}{
+  $S\leftarrow\{j:\hat P[k][j]\ge t[j]\}$\;
+  \If{$|S|=1$}{ $y^*\leftarrow$ the element of $S$ }
+  \ElseIf{$|S|>1$}{ $y^*\leftarrow \argmax_j \hat P[k][j]$ \tcp*{collision}}
+  \If{$|S|>0$}{ $C[\tilde y[k]][y^*]\leftarrow C[\tilde y[k]][y^*]+1$ }
+}
+\Return $C$\;
+\end{algorithm}
+
+\paragraph{Complexity.} $O(nm+m^2)$ time and storage: one pass for the thresholds, one pass over the $n\times m$ matrix for the counts.
+
+\section{A worked example}
+Take $m=3$ classes (dog, fox, cow) and $n=9$ examples, three per given label. Rows of $\hat P$ are $(\hat p_{\text{dog}},\hat p_{\text{fox}},\hat p_{\text{cow}})$:
+\begin{center}
+\small
+\begin{tabular}{@{}ccccl@{}}
+\toprule
+$k$ & given $\tilde y$ & $\hat p$ & passes thresholds & cell\\
+\midrule
+1 & dog & $(0.90,0.05,0.05)$ & dog & (dog,dog)\\
+2 & dog & $(0.70,0.20,0.10)$ & dog & (dog,dog)\\
+3 & dog & $(0.10,0.80,0.10)$ & fox & (dog,fox) \textbf{error}\\
+4 & fox & $(0.10,0.70,0.20)$ & fox & (fox,fox)\\
+5 & fox & $(0.60,0.30,0.10)$ & dog & (fox,dog) \textbf{error}\\
+6 & fox & $(0.20,0.60,0.20)$ & fox & (fox,fox)\\
+7 & cow & $(0.10,0.10,0.80)$ & cow & (cow,cow)\\
+8 & cow & $(0.30,0.30,0.40)$ & none & \emph{not counted}\\
+9 & cow & $(0.05,0.05,0.90)$ & cow & (cow,cow)\\
+\bottomrule
+\end{tabular}
+\end{center}
+Thresholds: $t_{\text{dog}}=\frac{0.9+0.7+0.1}{3}\approx0.567$, $t_{\text{fox}}=\frac{0.7+0.3+0.6}{3}\approx0.533$, $t_{\text{cow}}=\frac{0.8+0.4+0.9}{3}=0.7$. The resulting confident joint, and (for comparison) the confusion matrix from $\arg\max$ predictions, are
+\[
+\Cyy=\begin{pmatrix}2&1&0\\1&2&0\\0&0&2\end{pmatrix},\qquad
+\Cconf=\begin{pmatrix}2&1&0\\1&2&0\\0&0&3\end{pmatrix}.
+\]
+They differ only on example 8, whose probabilities are nearly uniform: the baseline forces it into (cow,cow); CL declines to count it.
+
+\section{The baseline $C_{\text{confusion}}$}
+A natural baseline, equivalent to a single iteration of the INCV method, assumes the model's $\arg\max$ is the truth: $y^*_k:=\argmax_i\hat p(\tilde y=i;x_k,\theta)$, and builds the confusion matrix
+\[\Cconf[i][j]=\bigl|\{k:\tilde y_k=i,\ \argmax\nolimits_l\hat p_{x_k,\tilde y=l}=j\}\bigr|.\] It is consistent for noiseless probabilities (Theorem~\ref{thm:exact}) but fails when the probability distributions differ across classes (class imbalance, per-class over-confidence), as proved in Chapter~6: thresholds are what buy that robustness.
+
+\section*{Exercises}
+\begin{exercise}
+Recompute the worked example after changing example 5 to $\hat p=(0.60,0.55,0.05)$. What are the new thresholds? Does a collision occur and how is it resolved?
+\end{exercise}
+\begin{exercise}
+Prove that if all probability vectors are one-hot, no collisions occur and $\Cyy=\Cconf$ whenever each class has at least one correctly-predicted example.
+\end{exercise}
+
+% =====================================================================
+\chapter{From Counts to a Joint Distribution}
+% =====================================================================
+
+\section{Calibration}
+$\Cyy$ is a matrix of counts, but (i) its row sums need not equal the observed class sizes $|X_{\tilde y=i}|$ (examples may be uncounted), and (ii) it need not sum to $n$. We rescale in two steps:
+\begin{equation}\label{eq:joint}
+\tilde C_{ij}:=\frac{\Cyy[i][j]}{\sum_{j'\in[m]}\Cyy[i][j']}\cdot|X_{\tilde y=i}|,\qquad
+\hat Q_{\tilde y=i,y^*=j}:=\frac{\tilde C_{ij}}{\sum_{i',j'\in[m]}\tilde C_{i'j'}}.
+\end{equation}
+\begin{itemize}
+  \item The \textbf{first factor} makes row $i$ sum to the observed count $|X_{\tilde y=i}|$, so that
+  $\sum_j\hat Q_{\tilde y=i,y^*=j}=|X_{\tilde y=i}|/\sum_{i'}|X_{\tilde y=i'}|$, the observed noisy prior.
+  \item The \textbf{second factor} normalizes the whole matrix to sum to $1$.
+\end{itemize}
+Since $\sum_i |X_{\tilde y=i}|=n$, the denominator equals $n$, so $n\hat Q_{\tilde y,y^*}$ is a count matrix whose row sums match the data.
+
+\begin{algorithm}[H]
+\caption{JointEstimation$(C,\tilde y)$}\label{alg:joint}
+\KwIn{$C\in\N^{m\times m}$ confident joint; $\tilde y\in[m]^n$ noisy labels}
+\KwOut{$\hat Q_{\tilde y,y^*}$, an estimate of $p(\tilde y,y^*)$}
+\For{$i\leftarrow1$ \KwTo $m$}{
+  $\tilde C[i][\cdot]\leftarrow C[i][\cdot]\,/\,\sum_{j}C[i][j]\cdot|X_{\tilde y=i}|$ \tcp*{match row sums to the observed marginal}
+}
+$\hat Q\leftarrow \tilde C/\sum_{i,j}\tilde C[i][j]$ \tcp*{total mass 1}
+\Return $\hat Q$\;
+\end{algorithm}
+
+\begin{remark}
+If a row of $\Cyy$ is entirely zero, its row-normalization is undefined; in practice this means the model has found no confident example for that given label and the class should be inspected (or the threshold reconsidered).
+\end{remark}
+
+\section{Label-noise characterization}
+From $\hat Q_{\tilde y,y^*}$ we read off all the standard noise statistics from its marginals:
+\begin{align}
+\hat Q_{y^*=j} &:= \sum_{i\in[m]}\hat Q_{\tilde y=i,y^*=j} &&\text{(latent prior)},\\
+\hat Q_{\tilde y=i\mid y^*=j} &:= \frac{\hat Q_{\tilde y=i,y^*=j}}{\hat Q_{y^*=j}} &&\text{(noise rates / transition matrix)},\\
+\hat Q_{y^*=j\mid\tilde y=i} &:= \frac{\hat Q_{\tilde y=i,y^*=j}}{Q_{\tilde y=i}},\quad Q_{\tilde y=i}=\frac{|X_{\tilde y=i}|}{n} &&\text{(inverse noise rates / mixing matrix)}.
+\end{align}
+Whenever $\hat Q_{\tilde y,y^*}\approx Q_{\tilde y,y^*}$, all three are consistent as well. In addition, only the joint gives directly the \emph{number of label errors for each pair of classes}: $n\,\hat Q_{\tilde y=i,y^*=j}$ for $i\neq j$.
+
+\begin{keyidea}
+Earlier methods estimate noise transition matrices by \emph{averaging predicted probabilities}, which are error-prone. CL is one step removed: it compares probabilities against a threshold and \emph{counts}. The estimate depends only on the \emph{ranking} of each probability relative to its threshold, not on its exact value, which is why it is robust to imperfect probability estimates.
+\end{keyidea}
+
+\section{Worked examples}
+\paragraph{Example A (continuing Chapter~3).} The confident joint $\Cyy=\begin{psmallmatrix}2&1&0\\1&2&0\\0&0&2\end{psmallmatrix}$ has row sums $(3,3,2)$ while $|X_{\tilde y=i}|=(3,3,3)$. Calibration rescales the cow row by $3/2$:
+\[
+\tilde C=\begin{pmatrix}2&1&0\\1&2&0\\0&0&3\end{pmatrix},\qquad
+\hat Q_{\tilde y,y^*}=\frac19\begin{pmatrix}2&1&0\\1&2&0\\0&0&3\end{pmatrix}.
+\]
+Column sums give the latent prior $\hat Q_{y^*}=(\tfrac13,\tfrac13,\tfrac13)$; dividing columns by it gives the noise rates, e.g.\ $\hat p(\tilde y=\text{fox}\mid y^*=\text{dog})=\tfrac13$. The estimated number of label errors is $9\cdot(\tfrac19+\tfrac19)=2$, in agreement with the two off-diagonal examples (3 and 5).
+
+\paragraph{Example B (a joint from raw counts).} Consider the confident joint
+\[
+\Cyy=\begin{pmatrix}100&40&20\\56&60&0\\32&12&80\end{pmatrix}
+\]
+with $|X_{\tilde y=i}|=(160,116,124)$, which equal the row sums, so the first step of~\eqref{eq:joint} is the identity and $n=400$:
+\[
+\hat Q_{\tilde y,y^*}=\frac{1}{400}\begin{pmatrix}100&40&20\\56&60&0\\32&12&80\end{pmatrix}
+=\begin{pmatrix}0.25&0.10&0.05\\0.14&0.15&0\\0.08&0.03&0.20\end{pmatrix}.
+\]
+The latent prior is $\hat Q_{y^*}=(0.47,0.28,0.25)$ while the observed prior is $(0.40,0.29,0.31)$: the data under-represent the first class, which has had some of its examples mislabeled into the other two. The estimated number of label errors is $400\cdot(1-0.25-0.15-0.20)=160$ (40\%).
+
+\section*{Exercises}
+\begin{exercise}
+In Example B, compute the noise transition matrix $\hat Q_{\tilde y|y^*}$ and the mixing matrix $\hat Q_{y^*|\tilde y}$, and check their stochastic structure (which index sums to~1).
+\end{exercise}
+\begin{exercise}
+Show that $\sum_{i,j}\tilde C_{ij}=\sum_i|X_{\tilde y=i}|=n$ provided no row of $\Cyy$ is zero.
+\end{exercise}
+
+% =====================================================================
+\chapter{Rank, Prune and Train}
+% =====================================================================
+
+Once $\Cyy$ and $\hat Q_{\tilde y,y^*}$ are available, \emph{any} rank-and-prune strategy can be used to clean the data. This modularity is a design advantage: unlike methods that couple noise estimation with the training loss, CL separates estimation, ranking and training, each interpretable on its own. The paper studies five methods in two families.
+
+\section{Approach 1: use the off-diagonals of $\Cyy$}
+\begin{description}[leftmargin=1.5cm,style=nextline]
+\item[Baseline 1: $\Cconf$.] Flag $x_k$ as a label error iff $\tilde y_k\ne\argmax_{j}\hat p(\tilde y=j;x_k,\theta)$. (Equals the off-diagonals of $\Cconf$.)
+\item[Method 2: $\Cyy$.] Flag as errors the examples in $\bigcup_{i\ne j}\hat X_{\tilde y=i,y^*=j}$, the sets counted in the off-diagonals of the confident joint.
+\end{description}
+
+\section{Approach 2: use $n\cdot\hat Q_{\tilde y,y^*}$ to decide \emph{how many} to remove}
+Here $n\,\hat Q_{\tilde y=i,y^*=j}$ estimates $|\hat X_{\tilde y=i,y^*=j}|$, i.e.\ \emph{how many} label errors there are in each cell. A ranking then decides \emph{which} examples to remove.
+\begin{description}[leftmargin=1.5cm,style=nextline]
+\item[Method 3: Prune by Class (PBC).] For each class $i\in[m]$, remove the
+\[
+n\cdot\sum_{j\in[m]:\,j\ne i}\hat Q_{\tilde y=i,y^*=j}
+\]
+examples of $X_{\tilde y=i}$ with the \emph{lowest self-confidence} $\hat p(\tilde y=i;x\in X_i)$.
+\item[Method 4: Prune by Noise Rate (PBNR).] For every off-diagonal cell $(i,j)$, $i\ne j$, remove the $n\cdot\hat Q_{\tilde y=i,y^*=j}$ examples $x\in X_{\tilde y=i}$ with the \emph{largest margin}
+\[
+\hat p_{x,\tilde y=j}-\hat p_{x,\tilde y=i}.
+\]
+\item[Method 5: C+NR.] Remove an example only if \emph{both} PBC and PBNR remove it (set intersection).
+\end{description}
+
+\begin{example}[continuing the dog/fox/cow example]
+With $n\hat Q=\begin{psmallmatrix}2&1&0\\1&2&0\\0&0&3\end{psmallmatrix}$: PBC removes $n\sum_{j\ne i}\hat Q_{ij}=1$ example from the dog class (lowest self-confidence among $0.9,0.7,0.1$: example~3), $1$ from fox (lowest among $0.7,0.3,0.6$: example~5) and none from cow. PBNR for cell (dog,fox) removes the one dog-labeled example with the largest $\hat p_{\text{fox}}-\hat p_{\text{dog}}$ (example~3: $+0.7$), and for (fox,dog) example~5 ($+0.3$). Both agree, so C+NR removes examples~3 and~5.
+\end{example}
+
+\section{Ordering the errors}
+To present the found errors, sort them by the \emph{normalized margin}
+\[
+\hat p(\tilde y=i;x,\theta)-\max_{j\ne i}\hat p(\tilde y=j;x,\theta),
+\]
+most negative first (the model is most sure the given label is wrong). In the example, example~3 has margin $0.1-0.8=-0.7$ and example~5 has $0.3-0.6=-0.3$.
+
+\section{Which method to use?}
+By default use method~2 ($\Cyy$): its construction matches the conditions of the main theorem exactly (Theorem~\ref{thm:perex}), and it is empirically among the best. No hyperparameter is needed to find label errors in theory; in practice cross-validation adds the number of folds (the paper fixes $k=4$).
+
+\section{Training with errors removed}
+CL tells us which examples to drop but does not prescribe a training procedure. Since removing data shifts class proportions, reweight the loss of examples of class $i$ by
+\begin{equation}\label{eq:weight}
+w_i \;=\; \frac{1}{\hat p(\tilde y=i\mid y^*=i)} \;=\; \frac{\hat Q_{y^*}[i]}{\hat Q_{\tilde y,y^*}[i][i]}.
+\end{equation}
+Dividing by $\hat Q_{\tilde y,y^*}[i][i]$ undoes the loss of data in the class's clean diagonal, and multiplying by $\hat Q_{y^*}[i]$ re-normalizes to the latent class size.
+
+\begin{example}
+In the dog/fox/cow example $w=(\tfrac{1/3}{2/9},\tfrac{1/3}{2/9},\tfrac{1/3}{3/9})=(1.5,1.5,1)$. After pruning, two dog examples remain: $2\times1.5=3$, exactly the latent class size $n\hat Q_{y^*}[\text{dog}]=3$.
+\end{example}
+
+\section{The full algorithm}
+\begin{algorithm}[H]
+\caption{Confident Learning (end to end)}\label{alg:cl}
+\KwIn{dataset $X=(x_k,\tilde y_k)_{k=1}^n$; any probabilistic model family $\theta$}
+\KwOut{cleaned dataset $X'$, class weights $w$, trained model}
+$\hat P\leftarrow$ out-of-sample predicted probabilities via $K$-fold cross-validation\;
+$C\leftarrow$ ConfidentJoint$(\hat P,\tilde y)$ \tcp*{Alg.~\ref{alg:cj}}
+$\hat Q_{\tilde y,y^*}\leftarrow$ JointEstimation$(C,\tilde y)$ \tcp*{Alg.~\ref{alg:joint}}
+$E\leftarrow$ examples flagged by a rank-and-prune method (default: off-diagonals of $C$)\;
+sort $E$ by normalized margin\;
+$X'\leftarrow X\setminus E$\;
+$w_i\leftarrow \hat Q_{y^*}[i]/\hat Q_{\tilde y,y^*}[i][i]$ for $i\in[m]$\;
+train a model on $X'$ with per-class loss weights $w$\;
+\end{algorithm}
+
+\section*{Exercises}
+\begin{exercise}
+Construct a small $\hat P$ where PBC and PBNR remove \emph{different} examples. What does C+NR do in this case?
+\end{exercise}
+\begin{exercise}
+Why is ranking by predicted probability preferable to relabeling examples iteratively (think about error propagation)?
+\end{exercise}
+
+% =====================================================================
+\chapter{Theory: When Is Confident Learning Exact?}
+% =====================================================================
+
+We now ask: under what conditions on $\hat P$ does CL \emph{exactly} recover the sets $X_{\tilde y=i,y^*=j}$ and hence consistently estimate $Q_{\tilde y,y^*}$? Without some assumption on $\hat P$ it is impossible to separate label noise from model noise, so we start from an idealization and relax it in two steps.
+
+\paragraph{Conventions.} $\approx$ in the statements below accounts for \emph{discretization}: a count-based estimator cannot represent every real-valued rate (a true rate $0.39$ on 5 examples can at best be estimated as $2/5=0.4$). Besides this, all statements are exact. We assume every class appears in $X$. Matrix index convention: row $=\tilde y$, column $=y^*$, so ``the diagonal entry maximizes its row'' means $p(\tilde y=j\mid y^*=j)\ge p(\tilde y=j\mid y^*=i)$ for all $i$, and ``maximizes its column'' means $p(\tilde y=j\mid y^*=j)\ge p(\tilde y=l\mid y^*=j)$ for all $l$.
+
+\section{Noiseless predicted probabilities}
+\begin{condition}[Ideal]\label{cond:ideal}
+$\hat p(\tilde y=i;x_k,\theta)=p^*(\tilde y=i\mid y^*=y^*_k)=p^*(\tilde y=i\mid y^*=j)$ for every $x_k\in X_{y^*=j}$, $i,j\in[m]$. That is, the model outputs for $x$ exactly the noise rates of the true class of $x$.
+\end{condition}
+The last equality uses the class-conditional noise assumption. We write $p^*_{x,\tilde y=i}$ for these ideal values.
+
+\begin{lemma}[Ideal thresholds]\label{lem:thresh}
+If $\hat p$ is ideal, then for every $i\in[m]$
+\[
+t_i=\sum_{j\in[m]}p(\tilde y=i\mid y^*=j)\,p(y^*=j\mid\tilde y=i).
+\]
+\end{lemma}
+\begin{proof}
+By definition $t_i=\E_{x\in X_{\tilde y=i}}\hat p(\tilde y=i;x,\theta)$. Under the ideal condition, $\hat p(\tilde y=i;x,\theta)=p(\tilde y=i\mid y^*=y^*_x)$, so
+\[
+t_i=\E_{x\in X_{\tilde y=i}}\,p(\tilde y=i\mid y^*=y^*_x)
+=\sum_{j\in[m]}p(\tilde y=i\mid y^*=j)\cdot\Pr\bigl(y^*_x=j\mid x\in X_{\tilde y=i}\bigr),
+\]
+and the last probability is $p(y^*=j\mid\tilde y=i)$.
+\end{proof}
+So $t_i$ is a \emph{weighted average} of the quantities $p(\tilde y=i\mid y^*=j)$ with weights $p(y^*=j\mid\tilde y=i)$ that sum to $1$. The $j=i$ term is the probability of a correct label; the $j\ne i$ terms are mislabeling probabilities weighted by how likely such a mislabeled example is to occur.
+
+\begin{theorem}[Exact label errors]\label{thm:exact}
+Let $\hat p$ be ideal and suppose each diagonal entry of $Q_{\tilde y|y^*}$ maximizes its row and its column. Then $\hat X_{\tilde y=i,y^*=j}=X_{\tilde y=i,y^*=j}$ for all $i,j$, hence $\hat Q_{\tilde y,y^*}\approx Q_{\tilde y,y^*}$ (consistent estimator).
+\end{theorem}
+\begin{proof}
+Fix $x\in X_{\tilde y=i,y^*=j}$. Then $\hat p(\tilde y=l;x)=p(\tilde y=l\mid y^*=j)$ for all $l$.
+
+\emph{Claim 1: $x$ passes the threshold of its true class $j$.} We need $p(\tilde y=j\mid y^*=j)\ge t_j$. Using the row-maximality of the diagonal and Lemma~\ref{lem:thresh},
+\begin{align*}
+p(\tilde y=j\mid y^*=j)&=\sum_{a}p(\tilde y=j\mid y^*=j)\,p(y^*=a\mid\tilde y=j)\\
+&\ge\sum_a p(\tilde y=j\mid y^*=a)\,p(y^*=a\mid\tilde y=j)=t_j,
+\end{align*}
+where the first equality uses $\sum_a p(y^*=a\mid\tilde y=j)=1$ and the inequality uses $p(\tilde y=j\mid y^*=j)\ge p(\tilde y=j\mid y^*=a)$.
+
+\emph{Claim 2: $x$ is assigned to $j$ and to no other bin.} By Claim~1 the set $S$ of classes that $x$ passes contains $j$. If $S=\{j\}$ there is nothing more to show. If $|S|>1$ (collision), CL assigns $x$ to $\argmax_l\hat p(\tilde y=l;x)=\argmax_l p(\tilde y=l\mid y^*=j)$, which equals $j$ because the diagonal entry maximizes its column. Hence $x\in\hat X_{\tilde y=i,y^*=j}$ and $x\notin\hat X_{\tilde y=i,y^*=j'}$ for $j'\ne j$.
+
+Since the noisy label $\tilde y=i$ is given, $x$ is also never placed in a bin of a different noisy class. Therefore every $x\in X_{\tilde y=i,y^*=j}$ lies in $\hat X_{\tilde y=i,y^*=j}$ and in no other estimated bin, so the estimated and true bins coincide. Finally, $\Cyy=nQ_{\tilde y,y^*}$ exactly (up to discretization), so the calibration~\eqref{eq:joint} leaves it unchanged, giving $\hat Q_{\tilde y,y^*}\approx Q_{\tilde y,y^*}$.
+\end{proof}
+
+\begin{remark}
+Theorem~\ref{thm:exact} is a sanity check: under the ideal condition the baseline $\Cconf$ (guess $y^*=\argmax\hat p$) also satisfies it, since $\argmax_l p(\tilde y=l\mid y^*=j)=j$ by column-maximality alone. The real contribution of CL is in the relaxed settings below.
+\end{remark}
+
+\section{Noisy predicted probabilities}
+\subsection{Per-class errors}
+Neural networks are known to be \emph{class-conditionally} over- or under-confident. We model this by an affine distortion per class.
+\begin{condition}[Per-class diffracted]\label{cond:perclass}
+There exist $\eps^{(1)}_j>0$ and $\eps^{(2)}_j\in\R$ such that $\hat p_{x,\tilde y=j}=\eps^{(1)}_j\,p^*_{x,\tilde y=j}+\eps^{(2)}_j$ for all $x$ and $j$ (for any $j$-dependent constants; outputs need not even be valid probabilities).
+\end{condition}
+\begin{pitfall}
+The paper states $\eps_j^{(1)},\eps_j^{(2)}\in\R$. A negative scale $\eps_j^{(1)}<0$ would \emph{reverse} the order and the comparison in the proof below flips, so we require $\eps_j^{(1)}>0$ (order-preserving distortion), which is the intended meaning.
+\end{pitfall}
+
+\begin{corollary}[Per-class robustness]\label{cor:perclass}
+If $\hat p$ is per-class diffracted, \emph{no collisions} occur, and each diagonal entry of $Q_{\tilde y|y^*}$ maximizes its row, then $\hat X_{\tilde y=i,y^*=j}=X_{\tilde y=i,y^*=j}$ and $\hat Q_{\tilde y,y^*}\approx Q_{\tilde y,y^*}$.
+\end{corollary}
+\begin{proof}
+The threshold of class $j$ under the distortion is
+\[
+\hat t_j=\E_{x\in X_{\tilde y=j}}\bigl[\eps^{(1)}_j p^*_{x,\tilde y=j}+\eps^{(2)}_j\bigr]=\eps^{(1)}_j t^*_j+\eps^{(2)}_j,
+\]
+where $t_j^*$ is the ideal threshold. Hence
+\[
+\hat p_{x,\tilde y=j}\ge\hat t_j\iff \eps^{(1)}_j(p^*_{x,\tilde y=j}-t^*_j)\ge 0\iff p^*_{x,\tilde y=j}\ge t^*_j .
+\]
+So the bins $\{x\in X_{\tilde y=i}:\hat p_{x,\tilde y=j}\ge\hat t_j\}$ coincide with the bins built from ideal probabilities. By Claim~1 in the proof of Theorem~\ref{thm:exact} (which only uses row-maximality), every $x\in X_{\tilde y=i,y^*=j}$ is in bin $j$; since there are no collisions it is in no other bin, so the estimated bins equal the true ones.
+\end{proof}
+
+\begin{intuition}
+The column-maximality hypothesis is no longer needed because it was used only to break collisions. The baseline \emph{does} need it: if the probabilities of a single class are boosted dramatically (say $\eps^{(2)}_3=+0.4$), $\argmax$ outputs class~3 for almost everything, so $\Cconf$ has only one non-empty column, whereas CL subtracts the class threshold, which re-centers each class's scale. (In a numerical test with four classes and ideal probabilities $\hat p\mapsto0.5\hat p$, with $+0.4$ added to class~4, CL recovered every count exactly while $\Cconf$ did not.)
+\end{intuition}
+
+\subsection{Per-example errors}
+The per-class model has only $m$ free distortions. A real model can output $n\times m$ different errors. We therefore allow an independent error for every example and class, subject to a margin condition.
+
+\begin{condition}[Per-example diffracted]\label{cond:perex}
+For all $j\in[m]$, $x\in X$: $\hat p_{x,\tilde y=j}=p^*_{x,\tilde y=j}+\eps_{x,\tilde y=j}$, where, with $\bar\eps_j=\E_{x\in X}\eps_{x,\tilde y=j}$,
+\begin{equation}\label{eq:perex}
+\eps_{x,\tilde y=j}\sim\begin{cases}
+\mathcal U\bigl(\bar\eps_j+t_j-p^*_{x,\tilde y=j},\ \bar\eps_j-t_j+p^*_{x,\tilde y=j}\bigr] & p^*_{x,\tilde y=j}\ge t_j,\\[3pt]
+\mathcal U\bigl[\bar\eps_j-t_j+p^*_{x,\tilde y=j},\ \bar\eps_j+t_j-p^*_{x,\tilde y=j}\bigr) & p^*_{x,\tilde y=j}< t_j.
+\end{cases}
+\end{equation}
+\end{condition}
+The interval is centered at $\bar\eps_j$ with half-width $|p^*_{x,\tilde y=j}-t_j|$, \emph{the distance of the ideal probability to the ideal threshold}. Equivalently: the noise is allowed to be as large as is necessary to push $p^*$ to the threshold but not across it.
+
+\begin{theorem}[Per-example robustness]\label{thm:perex}
+Let $\hat p$ be per-example diffracted, assume no label collisions and that each diagonal entry of $Q_{\tilde y|y^*}$ maximizes its row. Then $\hat X_{\tilde y=i,y^*=j}\approx X_{\tilde y=i,y^*=j}$ and $\hat Q_{\tilde y,y^*}\approx Q_{\tilde y,y^*}$.
+\end{theorem}
+\begin{proof}
+Without collisions the estimated bins are $\hat X_{\tilde y=i,y^*=j}=\{x\in X_{\tilde y=i}:\hat p_{x,\tilde y=j}\ge\hat t_j\}$ with $\hat t_j=\E_{x\in X_{\tilde y=j}}\hat p_{x,\tilde y=j}$. Then
+\[
+\hat t_j=\E_{x\in X_{\tilde y=j}}p^*_{x,\tilde y=j}+\E_{x\in X_{\tilde y=j}}\eps_{x,\tilde y=j}=t_j+\bar\eps_j,
+\]
+where we used that the error is spread uniformly over $x\in X$ and $n\to\infty$, so the average over $X_{\tilde y=j}$ equals the global mean $\bar\eps_j$. (This is the only place where an asymptotic argument is needed, which is why the theorem is stated with $\approx$.) We show
+\[
+p^*_{x,\tilde y=j}+\eps_{x,\tilde y=j}\ge t_j+\bar\eps_j\iff p^*_{x,\tilde y=j}\ge t_j .
+\]
+\emph{($\Leftarrow$)} If $p^*\ge t_j$, then by~\eqref{eq:perex} $\eps_{x,\tilde y=j}>\bar\eps_j+t_j-p^*$, so $p^*+\eps>t_j+\bar\eps_j$.
+\emph{($\Rightarrow$)} If $p^*<t_j$, then $\eps_{x,\tilde y=j}<\bar\eps_j+t_j-p^*$, so $p^*+\eps<t_j+\bar\eps_j$, which by contraposition gives the implication.\\
+Hence the estimated bins coincide with the ideal-probability bins $\{p^*_{x,\tilde y=j}\ge t_j\}$. These equal the true bins by the argument of Theorem~\ref{thm:exact} (Claim~1 plus absence of collisions).
+\end{proof}
+
+\begin{example}
+A dog image is labeled ``fox''. Suppose $t_{\text{fox}}=0.6$, $p^*(\tilde y=\text{fox}\mid y^*=\text{dog})=0.2$, $t_{\text{dog}}=0.8$ and $p^*(\tilde y=\text{dog}\mid y^*=\text{dog})=0.9$. With $\bar\eps=0$ the theorem allows $\eps_{x,\text{fox}}\in[-0.4,0.4)$ and $\eps_{x,\text{dog}}\in(-0.1,0.1]$: for any error in these ranges, $\hat p_{x,\text{fox}}<\hat t_{\text{fox}}$ and $\hat p_{x,\text{dog}}\ge\hat t_{\text{dog}}$, and CL still concludes $y^*=\text{dog}$.
+\end{example}
+
+\begin{keyidea}
+All three results say the same thing: \emph{CL needs the model's probabilities to be on the correct side of the (shifted) threshold, not to be accurate}. Per-example noise may be large (up to $0.4$ in the example) as long as it never flips the comparison $\hat p\gtrless\hat t$. This is the \emph{rank principle}: the values of the probabilities do not matter, only their ordering relative to a per-class reference.
+\end{keyidea}
+
+\begin{remark}[Generalizations and caveats]
+(1) Any bounded, symmetric noise distribution with mode $\bar\eps_j$ (not only the uniform) suffices in Condition~\ref{cond:perex}. (2) The bounds are non-vacuous since $t_j\ne p^*_{x,\tilde y=j}$ by Lemma~\ref{lem:thresh} (in the generic case). (3) The statements are for the no-collision case; with collisions the $\argmax$ rule is invoked and Theorem~\ref{thm:exact} covers the ideal case. (4) At finite $n$ the equality is approximate: in a simulation with $n=2\times10^4$ and uniform per-example errors respecting~\eqref{eq:perex}, fewer than $0.2\%$ of the counts were misplaced.
+\end{remark}
+
+\section{Summary of the guarantees}
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}p{3.6cm}p{4.2cm}p{4.6cm}@{}}
+\toprule
+\textbf{Probabilities $\hat p$} & \textbf{Extra assumption} & \textbf{Guarantee for $\Cyy$}\\
+\midrule
+ideal (Cond.~\ref{cond:ideal}) & diagonal of $Q_{\tilde y|y^*}$ is max of row \emph{and} column & exact bins, $\hat Q\approx Q$ (Thm.~\ref{thm:exact}); $\Cconf$ also exact\\
+per-class diffracted (Cond.~\ref{cond:perclass}) & diagonal max of row; no collisions & exact bins (Cor.~\ref{cor:perclass}); $\Cconf$ can fail\\
+per-example diffracted (Cond.~\ref{cond:perex}) & diagonal max of row; no collisions; $n\to\infty$ & exact bins (Thm.~\ref{thm:perex})\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{Exercises}
+\begin{exercise}
+Show that the weights in Lemma~\ref{lem:thresh}, $p(y^*=j\mid\tilde y=i)$, sum to one, and conclude $t_i\le\max_j p(\tilde y=i\mid y^*=j)$ with equality iff all those probabilities are equal over the support of the weights.
+\end{exercise}
+\begin{exercise}
+Give a $2\times2$ noise matrix $Q_{\tilde y|y^*}$ with $0<$ off-diagonal entries where the diagonal maximizes its row but \emph{not} its column. Find a per-class diffraction under which Cor.~\ref{cor:perclass} applies but Theorem~\ref{thm:exact} does not.
+\end{exercise}
+\begin{exercise}
+Explain why a negative scale $\eps^{(1)}_j<0$ in Condition~\ref{cond:perclass} breaks Corollary~\ref{cor:perclass}.
+\end{exercise}
+
+% =====================================================================
+\chapter{Putting It Together: Practice and Reference Implementation}
+% =====================================================================
+
+\section{Checklist}
+\begin{enumerate}
+  \item Obtain \emph{out-of-sample} probabilities $\hat P$ (e.g.\ 4-fold cross-validation); any model, and any final training model, may be used.
+  \item Compute thresholds $t_j$ (mean self-confidence per given class).
+  \item Build $\Cyy$, assigning collisions by $\argmax$.
+  \item Calibrate to $\hat Q_{\tilde y,y^*}$; read off $\hat Q_{y^*}$, $\hat Q_{\tilde y|y^*}$, $\hat Q_{y^*|\tilde y}$ and $n\hat Q_{\tilde y=i,y^*=j}$ for $i\ne j$ (estimated error counts per class pair).
+  \item Flag errors (off-diagonals of $\Cyy$, or PBC/PBNR/C+NR), order them by normalized margin.
+  \item Remove them; train with per-class weights $w_i=\hat Q_{y^*}[i]/\hat Q_{\tilde y,y^*}[i][i]$.
+\end{enumerate}
+
+\section{Reference implementation (NumPy)}
+\begin{lstlisting}
+import numpy as np
+
+def confident_joint(P, y):
+    """P: (n,m) out-of-sample probs; y: (n,) noisy labels in 0..m-1.
+    Returns C (m,m) and the thresholds t."""
+    n, m = P.shape
+    t = np.array([P[y == j, j].mean() for j in range(m)])   # Eq. (thresholds)
+    C = np.zeros((m, m), dtype=int)
+    above = P >= t                                           # passes threshold of class j
+    for k in range(n):
+        S = np.flatnonzero(above[k])
+        if len(S) == 0:                                      # counted nowhere
+            continue
+        y_star = S[0] if len(S) == 1 else int(np.argmax(P[k]))   # collision -> argmax
+        C[y[k], y_star] += 1
+    return C, t
+
+def joint_estimate(C, y):
+    """Calibrate C to an estimate of p(y_noisy, y_star)."""
+    m = C.shape[0]
+    counts = np.bincount(y, minlength=m)                     # |X_{y~=i}|
+    C_tilde = C / C.sum(axis=1, keepdims=True) * counts[:, None]
+    return C_tilde / C_tilde.sum()
+
+def noise_statistics(Q):
+    prior = Q.sum(axis=0)                                    # Q_{y*}
+    transition = Q / prior                                   # p(y~=i | y*=j): columns sum to 1
+    mixing = Q / Q.sum(axis=1, keepdims=True)                # p(y*=j | y~=i): rows sum to 1
+    return prior, transition, mixing
+
+def find_label_errors(P, y, C=None):
+    """Method 2: examples in the off-diagonals of the confident joint,
+    ordered by normalized margin (most suspicious first)."""
+    if C is None:
+        C, t = confident_joint(P, y)
+    else:
+        t = np.array([P[y == j, j].mean() for j in range(P.shape[1])])
+    n, m = P.shape
+    errors = []
+    for k in range(n):
+        S = np.flatnonzero(P[k] >= t)
+        if len(S) == 0: continue
+        y_star = S[0] if len(S) == 1 else int(np.argmax(P[k]))
+        if y_star != y[k]:
+            margin = P[k, y[k]] - np.max(np.delete(P[k], y[k]))
+            errors.append((margin, k))
+    return [k for _, k in sorted(errors)]
+
+def class_weights(Q):
+    return Q.sum(axis=0) / np.diag(Q)                        # Eq. (weights)
+\end{lstlisting}
+The code reproduces Examples in Chapters~3--5: on the nine-example table above it returns $C=\begin{psmallmatrix}2&1&0\\1&2&0\\0&0&2\end{psmallmatrix}$, flags examples $3$ and $5$ (in that order), and gives $w=(1.5,1.5,1)$.
+
+\section{Solutions and hints to selected exercises}
+\paragraph{Exercise 2.1.} $Q_{y^*=j}=\sum_iQ_{ij}$; $Q_{\tilde y=i|y^*=j}=Q_{ij}/Q_{y^*=j}$; $Q_{y^*=j|\tilde y=i}=Q_{ij}/\sum_{j'}Q_{ij'}$. No noise $\iff$ all off-diagonals zero $\iff$ sparsity $=1$.
+\paragraph{Exercise 2.2.} If the model memorizes $\tilde y$, self-confidence is near 1 for every example and no error can be detected; out-of-sample prediction restores the signal.
+\paragraph{Exercise 3.1.} New thresholds: $t_{\text{fox}}=(0.7+0.55+0.6)/3\approx0.617$ (the fox row now includes $0.55$ for example 5), $t_{\text{dog}}$ unchanged. Example 5 passes dog ($0.6\ge0.567$) but not fox ($0.55<0.617$): no collision, still counted as (fox,dog). To get a collision, lower $t_{\text{fox}}$ below $0.55$.
+\paragraph{Exercise 3.2.} With one-hot outputs, $\hat p_{k,j}\in\{0,1\}$, each row passes the threshold of the predicted class, and of no other class, provided every threshold is positive (a class's threshold is positive iff at least one example labeled with it is predicted as that class); so $S=\{\arg\max\}$ and the two matrices coincide.
+\paragraph{Exercise 4.1.} $\hat Q_{y^*}=(0.47,0.28,0.25)$, so $\hat Q_{\tilde y|y^*}$ divides column $j$ by $0.47,0.28,0.25$ (columns sum to 1); $\hat Q_{y^*|\tilde y}$ divides row $i$ by $0.40,0.29,0.31$ (rows sum to 1).
+\paragraph{Exercise 6.1.} The weights $p(y^*=j\mid\tilde y=i)$ are a probability distribution over $j$, so $t_i$ is a convex combination of the numbers $p(\tilde y=i\mid y^*=j)$ and hence at most their maximum.
+\paragraph{Exercise 6.3.} The equivalence $\hat p\ge\hat t\iff\eps^{(1)}(p^*-t^*)\ge0$ becomes $\iff p^*\le t^*$ when $\eps^{(1)}<0$: the bins are the complement of the correct ones.
+
+\appendix
+\chapter{One-Page Summary}
+\begin{center}
+\fbox{\begin{minipage}{0.93\textwidth}
+\small
+\textbf{Inputs:} noisy labels $\tilde y$, out-of-sample probabilities $\hat P\in\R^{n\times m}$.\\[3pt]
+\textbf{Threshold:} $t_j=\frac1{|X_{\tilde y=j}|}\sum_{x\in X_{\tilde y=j}}\hat p(\tilde y=j;x)$.\\[3pt]
+\textbf{Confident joint:} $\Cyy[i][j]=\bigl|\{x\in X_{\tilde y=i}:\hat p_{x,\tilde y=j}\ge t_j,\ j=\argmax_{l:\hat p_{x,\tilde y=l}\ge t_l}\hat p_{x,\tilde y=l}\}\bigr|$.\\[3pt]
+\textbf{Joint estimate:} $\hat Q_{ij}=\dfrac{\frac{C_{ij}}{\sum_{j'}C_{ij'}}|X_{\tilde y=i}|}{\sum_{i',j'}\frac{C_{i'j'}}{\sum_{j''}C_{i'j''}}|X_{\tilde y=i'}|}$.\\[3pt]
+\textbf{Derived:} $\hat Q_{y^*=j}=\sum_i\hat Q_{ij}$, $\ \hat Q_{\tilde y=i|y^*=j}=\hat Q_{ij}/\hat Q_{y^*=j}$, $\ \hat Q_{y^*=j|\tilde y=i}=\hat Q_{ij}/Q_{\tilde y=i}$.\\[3pt]
+\textbf{Prune:} off-diagonals of $C$; or PBC (lowest self-confidence, $n\sum_{j\ne i}\hat Q_{ij}$ per class); PBNR (largest $\hat p_j-\hat p_i$, $n\hat Q_{ij}$ per cell); C+NR (intersection).\\[3pt]
+\textbf{Train:} remove errors, weight class $i$ by $\hat Q_{y^*}[i]/\hat Q_{ii}$.\\[3pt]
+\textbf{Guarantee:} ideal / per-class-affine / per-example-margin noise in $\hat p$ $\Rightarrow$ exact recovery of $X_{\tilde y=i,y^*=j}$ and consistent $\hat Q$ (Thm.~\ref{thm:exact}, Cor.~\ref{cor:perclass}, Thm.~\ref{thm:perex}).\\[3pt]
+\textbf{Cost:} $O(nm+m^2)$.
+\end{minipage}}
+\end{center}
+
+\end{document}
